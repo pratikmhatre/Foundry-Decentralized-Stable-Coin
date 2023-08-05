@@ -13,6 +13,9 @@ contract DscEngineTest is Test {
     address private wethAddress;
     address private wethPriceFeedAddress;
 
+    uint256 private constant COLLATERAL_AMOUNT = 10 ether;
+    address private USER = makeAddr("user");
+
     function setUp() external {
         HelperConfig helperConfig;
         DeployDSC deploy = new DeployDSC();
@@ -25,5 +28,12 @@ contract DscEngineTest is Test {
         uint256 expectedValue = 2000e18;
         uint256 actualValue = engine.getTokenValueInUsd(wethAddress, 1e18);
         assert(expectedValue == actualValue);
+    }
+
+    function testZeroCollateralRevertsError() external {
+        vm.expectRevert(
+            DSCEngine.DSCEngine__RequiresAmountGreaterThanZero.selector
+        );
+        engine.depositCollateral(wethAddress, 0);
     }
 }
