@@ -35,13 +35,17 @@ contract DSCEngine is ReentrancyGuard {
     error DSCEngine__TokenNotSupported();
     error DSC__MintingFailed();
     error DSCEngine__PoorHealthFactor(uint256);
+    error DSCEngine__HealthFactorOk();
     error DSC__TransferFailed();
+    error DSC__HealthFactorNotImproved();
 
     //////////////
     ///Events/////
     //////////////
     event CollateralDeposited(address indexed user, address indexed token, uint256 amount);
-    event CollateralRedeemed(address indexed tokenAddress, address indexed receiver, uint256 amount);
+    event CollateralRedeemed(
+        address indexed tokenAddress, address indexed sender, address indexed receiver, uint256 amount
+    );
     event DSCBurned(address indexed user, uint256 dscAmount);
 
     //////////////////////
@@ -60,6 +64,7 @@ contract DSCEngine is ReentrancyGuard {
     uint256 private constant LIQUIDATION_THRESHOLD = 50;
     uint256 private constant LIQUIDATION_PRECISION = 100;
     uint256 private constant MIN_HEALTH_FACTOR = 1;
+    uint256 private constant LIQUIDATION_BONUS = 10; //10% Bonus to liquidator
 
     //////////////////////
     ///Immutables/////////
@@ -99,12 +104,12 @@ contract DSCEngine is ReentrancyGuard {
         bool transferSuccess = IERC20(tokenAddress).transferFrom(msg.sender, address(this), tokenAmount);
         if (!transferSuccess) revert DSC__TransferFailed();
     }
+
     /**
      * mintDSC - The function takes the DSC amount to be minted and mints equivalent DSC tokens after
      * ensuring the health factor doesnt break after transaction
      * @param amount - Amount of DSC to be minted
      */
-
     function mintDSC(uint256 amount) public nonReentrant {
         s_dscMinted[msg.sender] += amount;
         _revertIfHealthFactorBroken(msg.sender);
@@ -139,36 +144,75 @@ contract DSCEngine is ReentrancyGuard {
         redeemCollateral(tokenAddress, tokenAmount);
     }
 
+    /**
+     * @dev This function is called my user to redeem his own collateral
+     * @param tokenAddress - Address of token collateral to be redeemes
+     * @param tokenAmount  - Amount of collateral to be removed
+     */
     function redeemCollateral(address tokenAddress, uint256 tokenAmount)
         public
         checkAmountGreaterThanZero(tokenAmount)
     {
-        s_userCollateralDeposited[msg.sender][tokenAddress] -= tokenAmount;
-        emit CollateralRedeemed(tokenAddress, msg.sender, tokenAmount);
-
+        _redeemCollateral(tokenAddress, tokenAmount, msg.sender, msg.sender); //deduct from sender's deposit in contract and send it to user's own wallet
         _revertIfHealthFactorBroken(msg.sender);
-
-        bool transferSuccess = IERC20(tokenAddress).transferFrom(address(this), msg.sender, tokenAmount);
-        if (!transferSuccess) revert DSC__TransferFailed();
     }
 
     function burnDSC(uint256 dscAmount) public checkAmountGreaterThanZero(dscAmount) {
-        s_dscMinted[msg.sender] -= dscAmount;
-        emit DSCBurned(msg.sender, dscAmount);
-
-        bool isSuccess = i_dsc.transferFrom(msg.sender, address(this), dscAmount);
-        if (!isSuccess) revert DSC__TransferFailed();
-        i_dsc.burn(dscAmount);
+        _burnDSC(dscAmount, msg.sender, msg.sender);
         _revertIfHealthFactorBroken(msg.sender);
     }
 
-    function liquidateUser() external {}
+    function _burnDSC(uint256 dscAmount, address onBehalfOf, address dscFrom) internal {
+        //remove dsc from user's account
+        s_dscMinted[onBehalfOf] -= dscAmount;
+        emit DSCBurned(msg.sender, dscAmount);
+
+        //take DSC from liquidator to this contract
+        bool isSuccess = i_dsc.transferFrom(dscFrom, address(this), dscAmount);
+        if (!isSuccess) revert DSC__TransferFailed();
+        i_dsc.burn(dscAmount);
+    }
+
+    function liquidateUser(address user, address collateral, uint256 debtToCover)
+        external
+        checkAmountGreaterThanZero(debtToCover)
+    {
+        uint256 initialHealthFactor = _calculateHealthFactor(user);
+        if (initialHealthFactor >= MIN_HEALTH_FACTOR) revert DSCEngine__HealthFactorOk();
+
+        uint256 debtInTokens = getTokenAmountFromUSD(collateral, debtToCover);
+        uint256 bonusTokens = (debtInTokens * LIQUIDATION_BONUS) / 100;
+        uint256 totalTokens = debtInTokens + bonusTokens; // This amount of tokens will be sent to liquidator
+        _redeemCollateral(collateral, totalTokens, user, msg.sender);
+        _burnDSC(debtToCover, user, msg.sender);
+
+        uint256 finalHealthFactor = _calculateHealthFactor(user);
+
+        if (finalHealthFactor <= initialHealthFactor) revert DSC__HealthFactorNotImproved();
+
+        _revertIfHealthFactorBroken(msg.sender);
+    }
 
     function getHealthFactor() external {}
+
+    function getTokenAmountFromUSD(address token, uint256 usdAmountInWei) public view returns (uint256) {
+        AggregatorV3Interface aggregator = AggregatorV3Interface(s_priceFeeds[token]);
+        (, int256 price,,,) = aggregator.latestRoundData();
+        return ((usdAmountInWei * PRECISION) / (uint256(price) * FEED_PRECISION));
+    }
 
     //////////////////////
     ///Internal Functions/////
     //////////////////////
+
+    function _redeemCollateral(address token, uint256 tokenAmount, address from, address to) internal {
+        s_userCollateralDeposited[from][token] -= tokenAmount;
+        emit CollateralRedeemed(token, from, to, tokenAmount);
+
+        bool isSuccess = IERC20(token).transfer(to, tokenAmount);
+        if (!isSuccess) revert DSC__TransferFailed();
+    }
+
     function _revertIfHealthFactorBroken(address userAddress) internal view {
         uint256 hf = _calculateHealthFactor(userAddress);
         if (hf < MIN_HEALTH_FACTOR) revert DSCEngine__PoorHealthFactor(hf);
