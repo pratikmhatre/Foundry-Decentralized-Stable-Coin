@@ -6,21 +6,33 @@ import {DecentralizedStableCoin} from "../../src/DecentralizedStableCoin.sol";
 import {Test, console} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
+import {MockV3Aggregator} from "../mocks/MockV3Aggregator.sol";
 
 contract Handler is Test {
     DecentralizedStableCoin dsc;
-    DSCEngine engine;
     address wethAddress;
     address wbtcAddress;
+    DSCEngine engine;
+    address wethPriceFeed;
+    address wbtcPriceFeed;
     uint256 MAX_COLLATERAL = type(uint96).max;
     uint256 public mintCalled = 0;
     address[] usersWithCollateral;
 
-    constructor(DecentralizedStableCoin _dsc, DSCEngine _engine, address _wethAddress, address _wbtcAddress) {
+    constructor(
+        DecentralizedStableCoin _dsc,
+        DSCEngine _engine,
+        address _wethAddress,
+        address _wbtcAddress,
+        address _wethPriceFeed,
+        address _wbtcPriceFeed
+    ) {
         dsc = _dsc;
         engine = _engine;
         wethAddress = _wethAddress;
         wbtcAddress = _wbtcAddress;
+        wethPriceFeed = _wethPriceFeed;
+        wbtcPriceFeed = _wbtcPriceFeed;
     }
 
     function depositCollateral(uint256 collateralSeed, uint256 collateralAmount) external {
@@ -54,11 +66,29 @@ contract Handler is Test {
         vm.stopPrank();
     }
 
+    /**
+     *
+     * @dev note : This function breaks the invariant, if value of the collateral drops drastically then our protocol gets doomed as it becomes undercollaterized
+     */
+    /*  function changePriceFeedValue(uint256 collateralSeed, int256 value) external {
+        value = bound(value, 1, type(int96).max);
+        address priceFeedAddress = _getValidCollateralPriceFeed(collateralSeed);
+        MockV3Aggregator(priceFeedAddress).updateAnswer(value);
+    } */
+
     function _getValidCollateralAddress(uint256 seed) internal view returns (address) {
         if (seed % 2 == 0) {
             return wethAddress;
         } else {
             return wbtcAddress;
+        }
+    }
+
+    function _getValidCollateralPriceFeed(uint256 seed) internal view returns (address) {
+        if (seed % 2 == 0) {
+            return wethPriceFeed;
+        } else {
+            return wbtcPriceFeed;
         }
     }
 

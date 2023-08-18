@@ -16,13 +16,15 @@ contract InvariantTest is StdInvariant, Test {
     HelperConfig helperConfig;
     address wethAddress;
     address wbtcAddress;
+    address wethPriceFeed;
+    address wbtcPriceFeed;
     Handler handler;
 
     function setUp() external {
         DeployDSC deploy = new DeployDSC();
         (dsc, engine, helperConfig) = deploy.run();
-        (wethAddress,, wbtcAddress,,) = helperConfig.activNetworkConfig();
-        handler = new Handler(dsc,engine,wethAddress,wbtcAddress);
+        (wethAddress, wethPriceFeed, wbtcAddress, wbtcPriceFeed,) = helperConfig.activNetworkConfig();
+        handler = new Handler(dsc,engine,wethAddress,wbtcAddress, wethPriceFeed, wbtcPriceFeed);
         targetContract(address(handler));
     }
 
@@ -41,4 +43,22 @@ contract InvariantTest is StdInvariant, Test {
         console.log("Min Called", handler.mintCalled());
         assert(totalDSC <= totalCollateralInUsd);
     }
+
+    /* function invariant_GetterFunctionsShouldNeverRevert(
+        uint256 addressSeed,
+        address userAddress,
+        uint256 tokenAmount,
+        uint256 usdAmount
+    ) external view {
+        tokenAmount = bound(tokenAmount, 1 ether, type(uint96).max);
+        address collateralAddress = _getValidCollateralAddress(addressSeed);
+
+        engine.getDscOfUser(userAddress);
+
+        engine.getTokenAmountFromUSD(collateralAddress, usdAmount);
+        engine.getTokenValueInUsd(collateralAddress, tokenAmount);
+        engine.getUserAccountInfo(userAddress);
+        engine.getUserCollateralByTokenAddress(collateralAddress);
+        engine.getUserCollateralValueInUsd(userAddress);
+    } */
 }
